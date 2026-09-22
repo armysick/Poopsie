@@ -25,12 +25,17 @@ class LsArguments(TaskArguments):
         logger.info(self.tasking_location)
         self.load_args_from_dictionary(dictionary_arguments)
         if "host" in dictionary_arguments:
-            if "full_path" in dictionary_arguments:
-                self.add_arg("path", f'\\\\{dictionary_arguments["host"]}\\{dictionary_arguments["full_path"]}')
-            elif "path" in dictionary_arguments:
-                self.add_arg("path", f'\\\\{dictionary_arguments["host"]}\\{dictionary_arguments["path"]}')
-            elif "file" in dictionary_arguments:
-                self.add_arg("path", f'\\\\{dictionary_arguments["host"]}\\{dictionary_arguments["file"]}')
+            host = dictionary_arguments.get("host") or ""
+            path_val = (
+                dictionary_arguments.get("full_path")
+                or dictionary_arguments.get("path")
+                or dictionary_arguments.get("file")
+            )
+            if path_val:
+                # Only wrap in a UNC path (\\host\path) for a real remote host.
+                # A local file-browser action sends host="", which would otherwise
+                # produce a broken "\\\C:\..." path.
+                self.add_arg("path", f'\\\\{host}\\{path_val}' if host else path_val)
             else:
                 logger.info("unknown dictionary args")
         else:
