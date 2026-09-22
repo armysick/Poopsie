@@ -538,6 +538,26 @@ class Poopsie(PayloadType):
             resp.status = BuildStatus.Success
             resp.build_message += f"\nSuccessfully built Nim payload for {selected_os}\n"
 
+            # Mythic v4.0: report the build's architecture and output format so that
+            # wrappers can match against this payload file. Mythic records the OS itself.
+            arch_metadata = (
+                PayloadBuildMetadataArchitecture.X64
+                if self.get_parameter("architecture") == "x64"
+                else PayloadBuildMetadataArchitecture.X86
+            )
+            format_map = {
+                "Executable": PayloadBuildMetadataFormat.Exe,
+                "Service": PayloadBuildMetadataFormat.Exe,
+                "DLL": PayloadBuildMetadataFormat.Dll,
+                "Shellcode": PayloadBuildMetadataFormat.Shellcode,
+            }
+            resp.build_metadata = PayloadBuildMetadata(
+                architecture=arch_metadata,
+                format=format_map.get(
+                    self.get_parameter("output_type"), PayloadBuildMetadataFormat.Exe
+                ),
+            )
+
             if self.get_parameter("adjust_filename"):
                 resp.updated_filename = self.adjust_file_name(self.filename, selected_os)
 
