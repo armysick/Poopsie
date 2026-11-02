@@ -235,13 +235,22 @@ proc executeTask*(taskId: string, command: string, params: JsonNode): TaskExecut
       when defined(cmd_download):
         debug "[DEBUG] Starting download"
         result.response = executeDownload(taskId, params)
-        result.needsBackgroundTracking = true
-    
+        # Only enter background tracking if the init actually succeeded.
+        # If executeDownload returned a completed:true error response (file
+        # missing, read failure, etc.), it has NO "download" key, and
+        # agent.nim's background-task setup would crash reading total_chunks.
+        if not (result.response.hasKey(obf("completed")) and result.response[obf("completed")].getBool()):
+          result.needsBackgroundTracking = true
+
     of obf("upload"):
       when defined(cmd_upload):
         debug "[DEBUG] Starting upload"
         result.response = executeUpload(taskId, params)
-        result.needsBackgroundTracking = true
+        # Same guard as download: skip background tracking on an early
+        # completed:true error response, so agent.nim doesn't crash reading
+        # the "upload" key.
+        if not (result.response.hasKey(obf("completed")) and result.response[obf("completed")].getBool()):
+          result.needsBackgroundTracking = true
     
     of obf("execute_assembly"):
       when defined(cmd_execute_assembly):
