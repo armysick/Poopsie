@@ -81,7 +81,6 @@ class LsCommand(CommandBase):
         )
 
         path = taskData.args.get_arg("path")
-        response.DisplayParams = path
 
         if uncmatch := re.match(
             r"^\\\\(?P<host>[^\\]+)\\(?P<path>.*)$",
@@ -99,7 +98,18 @@ class LsCommand(CommandBase):
             if host == "127.0.0.1" or host.lower() == "localhost":
                 host = taskData.Callback.Host
 
-            taskData.args.set_arg("host", host)
+            # Drop host for local operations so the agent doesn't re-wrap the
+            # path into a UNC form (\\HOST\C:\...) that Windows rejects.
+            if host == (taskData.Callback.Host or "").upper():
+                taskData.args.set_arg("host", "")
+            else:
+                taskData.args.set_arg("host", host)
+
+        final_host = taskData.args.get_arg("host")
+        final_path = taskData.args.get_arg("path")
+        response.DisplayParams = (
+            f"\\\\{final_host}\\{final_path}" if final_host else final_path
+        )
 
         return response
 
