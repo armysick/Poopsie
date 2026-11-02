@@ -997,7 +997,22 @@ proc postResponses*(agent: var Agent) =
                     processDownloadChunk(taskId, state.fileId, state.path, state.currentChunk)
                   
                   agent.taskResponses.add(chunkResp)
-                  
+
+                  # Emit a progress line at ~10% milestones. Skips emission for
+                  # screenshots (which already go through completeScreenshot's own
+                  # status flow) and for the final chunk (completeDownload says it).
+                  # For 1-chunk downloads this emits nothing; the init's user_output
+                  # ("Starting download...") already covered the single-chunk case.
+                  if state.fileData.len == 0 and state.totalChunks > 1 and state.currentChunk < state.totalChunks:
+                    let curPct = (state.currentChunk * 100) div state.totalChunks
+                    let prevPct = ((state.currentChunk - 1) * 100) div state.totalChunks
+                    if (curPct div 10) > (prevPct div 10):
+                      agent.taskResponses.add(%*{
+                        obf("task_id"): taskId,
+                        obf("status"): obf("processing"),
+                        obf("user_output"): obf("Downloaded ") & $state.currentChunk & obf("/") & $state.totalChunks & obf(" chunks (") & $curPct & obf("%)\n")
+                      })
+
                   # Check if this was the last chunk
                   if state.currentChunk >= state.totalChunks:
                     let completeMsg = if state.fileData.len > 0:

