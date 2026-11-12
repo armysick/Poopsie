@@ -94,7 +94,22 @@ class LsCommand(CommandBase):
             if host == "127.0.0.1" or host.lower() == "localhost":
                 host = taskData.Callback.Host
 
-            taskData.args.set_arg("host", host)
+            if host == (taskData.Callback.Host or "").upper():
+                # Share-style paths must stay UNC to resolve; \\localhost\C$ works
+                # locally. Drive-letter paths stay local (the wrap Windows rejects
+                # is \\HOST\C:\..., i.e. a colon in the share segment).
+                if re.match(r"^[A-Za-z]:", taskData.args.get_arg("path") or ""):
+                    taskData.args.set_arg("host", "")
+                else:
+                    taskData.args.set_arg("host", host)
+            else:
+                taskData.args.set_arg("host", host)
+
+        final_host = taskData.args.get_arg("host")
+        final_path = taskData.args.get_arg("path")
+        response.DisplayParams = (
+            f"\\\\{final_host}\\{final_path}" if final_host else final_path
+        )
 
         return response
 
